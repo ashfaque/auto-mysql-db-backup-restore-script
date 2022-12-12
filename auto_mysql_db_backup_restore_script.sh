@@ -13,21 +13,78 @@
 
 
 # ? VARIABLES DECLARATION :-
+
+local_mysql_username="admin"
+local_mysql_password="admin"
+local_mysql_port="3306"
+
 # working_dir="/home/$LOGNAME/Documents/test"    # $LOGNAME or, $(id -n -u) or, $(whoami) can be used in place of $USER if it doesn't work.
 ssh_private_key_path="/home/ashfaque/.ssh/centosvm_ed25519"
 server_username="v3"
 server_host_ip="192.168.0.100"
 server_ssh_port="2222"
 
-mysql_username="remoteuser"
-mysql_password="123456"
-mysql_port="33060"
+remote_mysql_username="remoteuser"
+remote_mysql_password="123456"
+remote_mysql_port="33060"
 
 today_date=$(date +'%d_%m_%Y_%H_%M_%S')    # eg., O/P:- 25_06_2022_23_32_55
 backup_date=$(date +'%d-%m-%Y %H:%M:%S')
 
-ssh -i "$ssh_private_key_path" "$server_username"@"$server_host_ip" -p "$server_ssh_port" "mysqldump -u"$mysql_username" -p"$mysql_password" -P"$mysql_port" dump_db" > dump_db.sql
+from_db_name="dump_db"
+to_db_name="${from_db_name}"_"${today_date}"
 
+
+current_dir=${PWD}
+db_path=${current_dir}"/ssil_backup_restore_records.sqlite3"
+log_table_name="logs"
+expiry_days="15 days"
+
+
+
+# if db file doesn't exists
+# https://stackoverflow.com/a/26127039    strftime() default value and retrieving with -> datetime(created_at, 'unixepoch', 'localtime') as localtime
+# https://www.sqlite.org/lang_datefunc.html
+# https://www.sqlite.org/datatype3.html
+# [ ! -f "${db_path}" ] && sqlite3 ${db_path} "CREATE TABLE IF NOT EXISTS logs (id INTEGER PRIMARY KEY AUTOINCREMENT, db_name TEXT NOT NULL, created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')), expiry_time INTEGER NOT NULL, is_dropped INTEGER(1) NOT NULL);"
+[ ! -f "${db_path}" ] && sqlite3 ${db_path} "CREATE TABLE IF NOT EXISTS ${log_table_name} (id INTEGER PRIMARY KEY AUTOINCREMENT, db_name TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')), expiry_time TEXT NOT NULL DEFAULT (datetime('now', '+${expiry_days}', 'localtime')), is_dropped INTEGER(1) NOT NULL DEFAULT 0);"
+# just need to insert db_name,,,,and update is_dropped to 1 after dropping
+
+
+
+mysql -u${local_mysql_username} -p${local_mysql_password} -hlocalhost -P${local_mysql_port} -e "CREATE DATABASE IF NOT EXISTS ${to_db_name};"
+# or,
+# echo "CREATE DATABASE IF NOT EXISTS ${to_db_name};" | mysql -u${local_mysql_username} -p${local_mysql_password} -hlocalhost -P${local_mysql_port}
+
+sqlite3 ${db_path} "INSERT INTO ${log_table_name} (db_name) VALUES ('${to_db_name}');"
+
+
+ssh -i "$ssh_private_key_path" "$server_username"@"$server_host_ip" -p "$server_ssh_port" "mysqldump -u${remote_mysql_username} -p${remote_mysql_password} -P${remote_mysql_port} ${from_db_name}" > ${current_dir}{$to_db_name}.sql
+
+mysql -u${local_mysql_username} -p${local_mysql_password} -hlocalhost -P${local_mysql_port} ${to_db_name} < ${current_dir}{$to_db_name}.sql
+
+rm -rf ${current_dir}{$to_db_name}.sql
+
+
+
+
+#sql_select_query="SELECT db_name FROM ${log_table_name} WHERE expiry_time < datetime('now', 'localtime') AND db_name LIKE '${from_db_name}%' AND is_dropped = 0;"
+sql_select_query="SELECT id, db_name FROM ${log_table_name} WHERE created_at < datetime('now', 'localtime') AND db_name LIKE '${from_db_name}%' AND is_dropped = 0;"
+select_query_data=$(sqlite3 ${db_path} "${sql_select_query}")
+# echo "$select_query_data"
+for each in $select_query_data
+do
+    each_id=${each} | cut -d "|" -f 1
+    each_db_name=${each} | cut -d "|" -f 2
+done
+
+# [id] = SELECT db_name FROM logs where datetime.now() > expiry_time and is_dropped=0;
+# for each in [id]:
+#     fetch name having id in each
+#     drop fetched name, DROP DATABASE [IF EXISTS] database_name;
+#     update is_delted= True where id in each
+# ! drop according to expiry time for loop
+# ! update is deleted true
 
 
 
@@ -142,3 +199,4 @@ echo "Successfully created DB backup at $backup_date."
 # firewall-cmd --permanent --add-port=3306/tcp
 # systemctl restart mariadb
 
+# $ sudo apt-get install sqlite3
