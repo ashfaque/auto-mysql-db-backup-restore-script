@@ -1,18 +1,24 @@
-#!/bin/sh
+#!/bin/bash
 
 # * ######################## * #
 # * Author : Ashfaque Alam   * #
 # * Date : December 11, 2022 * #
 # * ######################## * #
 
-# ! Give executable permission : sudo chmod +x auto_mysql_db_dump_restore.sh
-
-# ? A shell script to which can be run with a crontab. Can take a dump of the entire MySQL database from remote server, then restore in a new database.
-# ? If ran will 1st delete databases older than 15 days.
 
 
+# ! Give executable permission : sudo chmod +x auto_mysql_db_backup_restore_script.sh
 
-# ? VARIABLES DECLARATION :-
+
+
+# ? A shell script which is able run with a crontab. Can take a dump of the entire MySQL database from remote server to local server, then restore in a new database.
+# ? Also, will 1st delete databases older than 15 days.
+
+
+
+#####################################
+####### VARIABLES DECLARATION #######
+#####################################
 
 local_mysql_username="admin"
 local_mysql_password="admin"
@@ -42,6 +48,41 @@ expiry_days="15 days"
 
 
 
+
+
+################################################
+####### No need to change anything below #######
+################################################
+
+# Function to check the last command ran is successful. If not then will throw the user defined msg and stops the script execution then and there. 
+# Doesn't work with ||, and conditional statements.
+exit_on_error() {    # Call it just below any command: exit_on_error $? "Error message"
+    exit_code=$1
+    error_msg=$2
+    if [ $exit_code -ne 0 ]; then
+        >&2 echo "\"${error_msg}\""
+        exit $exit_code
+    fi
+}
+
+
+type mysql >/dev/null 2>&1
+exit_on_error $? "MySQL is not installed"
+
+type sqlite3 >/dev/null 2>&1
+exit_on_error $? "SQLite3 is not installed"
+
+type ssh >/dev/null 2>&1
+exit_on_error $? "openssh-server is not installed"
+
+
+
+#! if error stop exec .sh
+#! drop db older than 15 days (saving their name and date in a db), just update is_deleted=True,,,after dropping,,,,or have expected_drop_time....on sqlite???
+
+
+
+
 # if db file doesn't exists
 # https://stackoverflow.com/a/26127039    strftime() default value and retrieving with -> datetime(created_at, 'unixepoch', 'localtime') as localtime
 # https://www.sqlite.org/lang_datefunc.html
@@ -53,30 +94,59 @@ expiry_days="15 days"
 
 
 mysql -u${local_mysql_username} -p${local_mysql_password} -hlocalhost -P${local_mysql_port} -e "CREATE DATABASE IF NOT EXISTS ${to_db_name};"
+exit_on_error $? "Not able to create database with name ${to_db_name} in local MySQL server"
 # or,
 # echo "CREATE DATABASE IF NOT EXISTS ${to_db_name};" | mysql -u${local_mysql_username} -p${local_mysql_password} -hlocalhost -P${local_mysql_port}
 
 sqlite3 ${db_path} "INSERT INTO ${log_table_name} (db_name) VALUES ('${to_db_name}');"
+exit_on_error $? "sqlite3 is not able to insert in ${log_table_name} the value: ${to_db_name}"
 
 
 ssh -i "$ssh_private_key_path" "$server_username"@"$server_host_ip" -p "$server_ssh_port" "mysqldump -u${remote_mysql_username} -p${remote_mysql_password} -P${remote_mysql_port} ${from_db_name}" > ${current_dir}{$to_db_name}.sql
+exit_on_error $? "Unable to dump .sql file over ssh from remote server"
 
 mysql -u${local_mysql_username} -p${local_mysql_password} -hlocalhost -P${local_mysql_port} ${to_db_name} < ${current_dir}{$to_db_name}.sql
+exit_on_error $? "Unable to restore .sql file in local database ${to_db_name}"
 
 rm -rf ${current_dir}{$to_db_name}.sql
+exit_on_error $? "Unable to delete .sql file located at: ${current_dir}{$to_db_name}.sql"
 
 
 
-
-#sql_select_query="SELECT db_name FROM ${log_table_name} WHERE expiry_time < datetime('now', 'localtime') AND db_name LIKE '${from_db_name}%' AND is_dropped = 0;"
-sql_select_query="SELECT id, db_name FROM ${log_table_name} WHERE created_at < datetime('now', 'localtime') AND db_name LIKE '${from_db_name}%' AND is_dropped = 0;"
-select_query_data=$(sqlite3 ${db_path} "${sql_select_query}")
+sqlite_select_query="SELECT id, db_name FROM ${log_table_name} WHERE expiry_time < datetime('now', 'localtime') AND db_name LIKE '${from_db_name}%' AND is_dropped = 0;"
+#sqlite_select_query="SELECT id, db_name FROM ${log_table_name} WHERE created_at < datetime('now', 'localtime') AND db_name LIKE '${from_db_name}%' AND is_dropped = 0;"
+select_query_data=$(sqlite3 ${db_path} "${sqlite_select_query}")
+exit_on_error $? "Unable to fetch databases name from sqlite3 table ${log_table_name} which are older than 15 days are are not dropped yet."
 # echo "$select_query_data"
-for each in $select_query_data
-do
-    each_id=${each} | cut -d "|" -f 1
-    each_db_name=${each} | cut -d "|" -f 2
-done
+if test ! -z "${select_query_data}"    # If `select_query_data` is not null
+then
+    for each_drop_data in $select_query_data
+    do
+        # echo $each_drop_data
+        IFS='|'
+        read -a each_drop_data_array <<< $each_drop_data    # Need to use bash instead of sh for this line only.
+        # or, 
+        # each_drop_data_array=(`echo $each_drop_data | tr '|' ' '`)    # Need to use bash instead of sh for this line only.
+        each_drop_id=${each_drop_data_array[0]}
+        each_drop_db_name=${each_drop_data_array[1]}
+        # echo $each_drop_id
+        # echo $each_drop_db_name
+
+
+        #each_id=${each} | cut -d "|" -f 1
+        #each_db_name=${each} | cut -d "|" -f 2
+
+        mysql -u${local_mysql_username} -p${local_mysql_password} -hlocalhost -P${local_mysql_port} -e "DROP DATABASE IF EXISTS ${each_drop_db_name};"
+        exit_on_error $? "Not able to drop database with name ${each_drop_db_name} in local MySQL server"
+
+        # updating is_dropped in sqlite3 database.
+        sqlite_update_query="UPDATE ${log_table_name} SET is_dropped=1 WHERE id=${each_drop_id};"
+        sqlite3 ${db_path} "${sqlite_update_query}"
+        exit_on_error $? "sqlite3 is not able to update is_dropped flag in ${log_table_name} table"
+    done
+
+
+fi
 
 # [id] = SELECT db_name FROM logs where datetime.now() > expiry_time and is_dropped=0;
 # for each in [id]:
