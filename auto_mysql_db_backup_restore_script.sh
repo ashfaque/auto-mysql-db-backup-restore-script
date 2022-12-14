@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 
 # * ######################## * #
 # * Author : Ashfaque Alam   * #
@@ -133,13 +133,21 @@ if test ! -z "${select_query_data}"    # If `select_query_data` is not null
 then
     for each_drop_data in $select_query_data
     do
-        IFS='|'
-        read -a each_drop_data_array <<< $each_drop_data    # Need to use bash instead of sh for this line only.
-        # or, 
-        # each_drop_data_array=(`echo $each_drop_data | tr '|' ' '`)    # Need to use bash instead of sh for this line only.
+        oIFS=$IFS
 
-        each_drop_id=${each_drop_data_array[0]}
-        each_drop_db_name=${each_drop_data_array[1]}
+        IFS='|'
+
+        set -- $each_drop_data    # Works with Bourne(sh) Shell.
+        each_drop_id=$1
+        each_drop_db_name=$2
+
+        #or,
+        #* read -a each_drop_data_array <<< $each_drop_data    # * Need to use #!/bin/bash instead of sh for this line only.
+        # or, 
+        # each_drop_data_array=(`echo $each_drop_data | tr '|' ' '`)    # * Need to use #!/bin/bash instead of sh for this line only.
+
+        #* each_drop_id=${each_drop_data_array[0]}
+        #* each_drop_db_name=${each_drop_data_array[1]}
 
         # echo $each_drop_id
         # echo $each_drop_db_name
@@ -154,6 +162,8 @@ then
         sqlite_update_query="UPDATE ${log_table_name} SET is_dropped=1 WHERE id=${each_drop_id};"
         sqlite3 ${sqlite_db_path} "${sqlite_update_query}"
         exit_on_error $? "sqlite3 is not able to update is_dropped flag in ${log_table_name} table"
+
+        IFS=$oIFS
     done
 fi
 
@@ -270,6 +280,20 @@ echo "##### Successfully performed DB backup & restore operations : ${backup_dat
 # ----------
 # Archives:-
 # ----------
+
+### Split a variable using positional argument in Bourne(sh) Shell ###
+# ------------------------------------------------------
+# var="foo|bar|baz"
+
+# oIFS=$IFS
+
+# IFS='|'
+# set -- $var
+# echo $1 $2 $3    # $var is now split into $1, $2, etc.
+
+# IFS=$oIFS
+# -------------------------------------------------------
+
 # ssh root@ipaddress "mysqldump -u dbuser -p dbname | gzip -9" > dblocal.sql.gz
 # ssh -l root ipaddress "mysqldump -u dbuser -p dbname | gzip -9" > dblocal.sql.gz
 # ssh -i key.pem root@ipaddress "mysqldump -u dbuser -p dbname | gzip -9" > dblocal.sql.gz
