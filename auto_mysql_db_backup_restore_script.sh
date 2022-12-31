@@ -7,13 +7,19 @@
 
 
 
-# ! Give executable permission : sudo chmod +x auto_mysql_db_backup_restore_script.sh
+# ! Give executable permission to this file:
+# ? sudo chmod +x auto_mysql_db_backup_restore_script.sh
+# ? chmod 755 auto_mysql_db_backup_restore_script.sh
 
 
 
-# ? A shell script which is able run with a crontab. Can take a dump of the entire MySQL database from remote server to local server, then restore in a new database.
-# ? Also, will 1st delete databases older than ${expiry_days}.
+# ? A shell script which is able run with a crontab.
+# ? Can take a dump of the entire MySQL database from remote server to local server
+# ? Then restore in a new database in current server.
+# ? Also, will delete databases older than ${expiry_days}.
 
+# ? Runs every day at 2:30AM IST
+# 0 21 * * * /usr/bin/sh /home/sftprod/ssil_db_bkup_restore_prod/db_bkup_restore_script.sh >> /home/sftprod/ssil_db_bkup_restore_prod/db_bkup_restore_script.log 2>&1
 
 
 #####################################
@@ -34,8 +40,14 @@ remote_mysql_username="remoteuser"
 remote_mysql_password="123456"
 remote_mysql_port="33060"
 
-today_date=$(date +'%d_%m_%Y_%H_%M_%S')    # eg., O/P:- 25_06_2022_23_32_55
-backup_date=$(date +'%d-%m-%Y %H:%M:%S')
+## If using local time on server.
+# today_date=$(date +'%d_%m_%Y_%H_%M_%S')    # eg., O/P:- 25_06_2022_23_32_55
+# backup_date=$(date +'%d-%m-%Y %H:%M:%S')
+
+## If using UTC server time and wanted to convert to another timezone.
+today_date=$(date -d "+ 330 minutes" +'%d_%m_%Y_%H_%M_%S')
+backup_date=$(date -d "+ 330 minutes" +'%d-%m-%Y %H:%M:%S')
+
 
 from_db_name="dump_db"
 to_db_name="${from_db_name}_${today_date}"
@@ -54,13 +66,16 @@ expiry_days="15 days"    # ? Only change the integer part, leave the `days` stri
 ####### No need to change anything below #######
 ################################################
 
+echo "##### STARTING DB backup & restore operations : ${backup_date} #####"
+
 # ? Function to check the last command ran is successful. If not then will throw the user defined msg and stops the script execution then and there. 
 #  Doesn't work with ||, and conditional statements.
 exit_on_error() {    # Call it just below any command: exit_on_error $? "Error message"
     exit_code=$1
     error_msg=$2
     if [ $exit_code -ne 0 ]; then
-        >&2 echo "\"${error_msg}\""
+        # >&2 echo "\"${error_msg}\" ---> $(date +'%d-%m-%Y %H:%M:%S')"    # If using local time on server
+        >&2 echo "\"${error_msg}\" ---> $(date -d "+ 330 minutes" +'%d-%m-%Y %H:%M:%S')"    # If using UTC on server and want date in IST.
         exit $exit_code
     fi
 }
@@ -106,19 +121,19 @@ exit_on_error $? "sqlite3 is not able to insert in ${log_table_name} the value: 
 
 
 # ? Dumping .sql file from remote server to current server via., ssh.
-ssh -i "$ssh_private_key_path" "$remote_server_username"@"$remote_server_host_ip" -p "$remote_server_ssh_port" "mysqldump -u${remote_mysql_username} -p${remote_mysql_password} -P${remote_mysql_port} ${from_db_name}" > ${current_dir}{$to_db_name}.sql
+ssh -i "$ssh_private_key_path" "$remote_server_username"@"$remote_server_host_ip" -p "$remote_server_ssh_port" "mysqldump -u${remote_mysql_username} -p${remote_mysql_password} -P${remote_mysql_port} ${from_db_name}" > "${current_dir}/${to_db_name}.sql"
 exit_on_error $? "Unable to dump .sql file over ssh from remote server"
 
 
 # ? Restoring the .sql file to our generated database.
-mysql -u${local_mysql_username} -p${local_mysql_password} -h${local_mysql_host} -P${local_mysql_port} ${to_db_name} < ${current_dir}{$to_db_name}.sql
+mysql -u${local_mysql_username} -p${local_mysql_password} -h${local_mysql_host} -P${local_mysql_port} ${to_db_name} < "${current_dir}/${to_db_name}.sql"
 exit_on_error $? "Unable to restore .sql file in local database ${to_db_name}"
 
 
 
 # ? Deleting the .sql file after restoring in our MySQL database.
-rm -rf ${current_dir}{$to_db_name}.sql
-exit_on_error $? "Unable to delete .sql file located at: ${current_dir}{$to_db_name}.sql"
+rm -rf "${current_dir}/${to_db_name}.sql"
+exit_on_error $? "Unable to delete .sql file located at: ${current_dir}/${to_db_name}.sql"
 
 
 
@@ -170,6 +185,8 @@ fi
 
 
 echo "##### Successfully performed DB backup & restore operations : ${backup_date} #####"
+
+#   ##################################################### END ######################################################
 
 
 
